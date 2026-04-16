@@ -107,7 +107,9 @@ async def _process_message(
         return
 
     chat = source_entities[event.chat_id]
-    chat_title = getattr(chat, "title", None) or getattr(chat, "username", None) or str(event.chat_id)
+    chat_title = (
+        getattr(chat, "title", None) or getattr(chat, "username", None) or str(event.chat_id)
+    )
     chat_username = getattr(chat, "username", None)
     sender_name = await _sender_name(event)
     link = _chat_link(event.chat_id, event.id, chat_username)
@@ -153,9 +155,14 @@ async def _scan_history(
             try:
                 sender = await msg.get_sender()
                 if sender is not None:
-                    parts = [getattr(sender, "first_name", None), getattr(sender, "last_name", None)]
+                    parts = [
+                        getattr(sender, "first_name", None),
+                        getattr(sender, "last_name", None),
+                    ]
                     n = " ".join(p for p in parts if p).strip()
-                    sender_name = n or getattr(sender, "username", None) or str(getattr(sender, "id", "?"))
+                    sender_name = (
+                        n or getattr(sender, "username", None) or str(getattr(sender, "id", "?"))
+                    )
             except Exception:
                 pass
             link = _chat_link(chat_id, msg.id, chat_username)

@@ -65,9 +65,7 @@ class Dedup:
         rows = [(msg_k, now)]
         if text_k:
             rows.append((text_k, now))
-        await self._db.executemany(
-            "INSERT OR REPLACE INTO seen(key, ts) VALUES (?, ?)", rows
-        )
+        await self._db.executemany("INSERT OR REPLACE INTO seen(key, ts) VALUES (?, ?)", rows)
         # opportunistic GC
         await self._db.execute("DELETE FROM seen WHERE ts < ?", (cutoff,))
         await self._db.commit()
