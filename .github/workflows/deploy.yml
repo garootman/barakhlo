@@ -1,0 +1,46 @@
+name: deploy
+
+on:
+  workflow_run:
+    workflows: [build]
+    types: [completed]
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: deploy
+  cancel-in-progress: false
+
+# Deploys via a self-hosted runner on the VPS.
+# Runtime config (.env, ./data) lives at $BARAKHLO_HOME on the VPS (default: ~/barakhlo).
+# compose.yaml is synced from the repo on every deploy.
+jobs:
+  deploy:
+    if: ${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success' }}
+    runs-on: self-hosted
+    permissions:
+      contents: read
+      packages: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: |
+            compose.yaml
+          sparse-checkout-cone-mode: false
+
+      - name: sync compose + up
+        shell: bash
+        run: |
+          set -euo pipefail
+          APP_HOME="${BARAKHLO_HOME:-$HOME/barakhlo}"
+          mkdir -p "$APP_HOME/data"
+          install -m 0644 compose.yaml "$APP_HOME/compose.yaml"
+          cd "$APP_HOME"
+          if [ ! -f .env ]; then
+            echo "ERROR: $APP_HOME/.env missing. Create it before first deploy." >&2
+            exit 1
+          fi
+          echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+          docker compose pull
+          docker compose up -d
+          docker image prune -f

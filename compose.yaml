@@ -1,0 +1,11 @@
+services:
+  barakhlo:
+    image: ghcr.io/garootman/barakhlo:latest
+    container_name: barakhlo
+    pull_policy: always
+    restart: unless-stopped
+    env_file: .env
+    volumes:
+      - ./data:/data
+    stdin_open: true
+    tty: true
