@@ -260,14 +260,18 @@ async def list_chats() -> None:
     cfg = config_mod.load()
     client = _client(cfg)
     await client.start()
-    print(f"{'id':>16}  {'type':<8}  title / username")
-    print("-" * 70)
+    out_path = cfg.data_dir / "chats.txt"
+    lines = [f"{'id':>16}  {'type':<8}  title / username", "-" * 70]
+    count = 0
     async for d in client.iter_dialogs():
         ent = d.entity
         kind = type(ent).__name__
         uname = getattr(ent, "username", None)
         label = d.name + (f" (@{uname})" if uname else "")
-        print(f"{d.id:>16}  {kind:<8}  {label}")
+        lines.append(f"{d.id:>16}  {kind:<8}  {label}")
+        count += 1
+    out_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    print(f"wrote {count} dialogs to {out_path}")
     await client.disconnect()
 
 
