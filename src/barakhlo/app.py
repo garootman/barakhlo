@@ -3,11 +3,12 @@ from __future__ import annotations
 import asyncio
 import io
 import logging
+import signal
 from datetime import datetime, timedelta, timezone
 from html import escape
 from typing import Iterable
 
-from telethon import TelegramClient, events
+from telethon import TelegramClient, events, utils as tg_utils
 
 from . import config as config_mod
 from .commands import handle_command
@@ -88,8 +89,9 @@ async def _resolve_sources(client: TelegramClient, raw: Iterable[str]) -> dict[i
             except ValueError:
                 pass
             entity = await client.get_entity(key)
-            resolved[entity.id] = entity
-            log.info("watching %s -> id=%s title=%s", s, entity.id, getattr(entity, "title", ""))
+            marked = tg_utils.get_peer_id(entity)
+            resolved[marked] = entity
+            log.info("watching %s -> id=%s title=%s", s, marked, getattr(entity, "title", ""))
         except Exception as e:
             log.error("cannot resolve source %r: %s", s, e)
     return resolved
@@ -344,10 +346,38 @@ async def run() -> None:
         log.info("startup catchup: last ~%s hours (%s days bucket)", hours, days)
         asyncio.create_task(trigger_scan(days))
 
+    stop = asyncio.Event()
+    loop = asyncio.get_running_loop()
+
+    def _on_signal(sig: int) -> None:
+        if not stop.is_set():
+            log.info("received signal %s, shutting down", sig)
+            stop.set()
+
+    for s in (signal.SIGINT, signal.SIGTERM):
+        try:
+            loop.add_signal_handler(s, _on_signal, int(s))
+        except NotImplementedError:
+            pass  # e.g. Windows
+
     log.info("running; send .help to Saved Messages for commands")
+    run_task = asyncio.create_task(client.run_until_disconnected())
+    stop_task = asyncio.create_task(stop.wait())
     try:
-        await client.run_until_disconnected()
+        done, pending = await asyncio.wait(
+            {run_task, stop_task}, return_when=asyncio.FIRST_COMPLETED
+        )
+        for t in pending:
+            t.cancel()
+        if stop_task in done:
+            log.info("disconnecting client")
+            await client.disconnect()
+            # let in-flight album flushes / handlers settle
+            await asyncio.sleep(ALBUM_FLUSH_SECONDS + 0.5)
+    except asyncio.CancelledError:
+        pass
     finally:
+        log.info("closing forwarder + dedup")
         await forwarder.close()
         await dedup.close()
 
