@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import io
 import logging
 from datetime import datetime, timedelta, timezone
 from html import escape
@@ -11,12 +12,15 @@ from telethon import TelegramClient, events
 from . import config as config_mod
 from .commands import handle_command
 from .dedup import Dedup
-from .forwarder import Forwarder
+from .forwarder import Forwarder, MediaItem
 from .keywords import Keywords
 from .matcher import match
 
 
 log = logging.getLogger("barakhlo")
+
+ALBUM_FLUSH_SECONDS = 1.5
+MAX_MEDIA_SIZE = 45_000_000  # bot API cap is 50MB; leave headroom
 
 
 def _setup_logging() -> None:
@@ -47,18 +51,24 @@ def _format(
     hits: list[str],
     text: str,
     link: str | None,
+    date: datetime | None,
+    *,
+    max_body: int = 3500,
 ) -> str:
     header = f"<b>{escape(chat_title)}</b>"
     if chat_username:
         header += f" (@{escape(chat_username)})"
-    header += f"\nfrom: {escape(sender_name)}\nhits: {escape(', '.join(hits))}"
-    body = escape(text[:3500])
-    footer = f'\n<a href="{link}">open in telegram</a>' if link else ""
-    return f"{header}\n\n{body}{footer}"
+    header += f"\nfrom: {escape(sender_name)}"
+    if date is not None:
+        header += f"\ndate: {date.strftime('%Y-%m-%d %H:%M UTC')}"
+    header += f"\nhits: {escape(', '.join(hits))}"
+    if link:
+        header += f'\n<a href="{link}">open in telegram</a>'
+    body = escape(text[:max_body])
+    return f"{header}\n\n{body}"
 
 
-async def _sender_name(event) -> str:
-    sender = await event.get_sender()
+def _sender_name_of(sender) -> str:
     if sender is None:
         return "?"
     parts = [getattr(sender, "first_name", None), getattr(sender, "last_name", None)]
@@ -72,7 +82,6 @@ async def _resolve_sources(client: TelegramClient, raw: Iterable[str]) -> dict[i
     resolved: dict[int, object] = {}
     for s in raw:
         try:
-            # numeric ids
             key: str | int = s
             try:
                 key = int(s)
@@ -86,38 +95,114 @@ async def _resolve_sources(client: TelegramClient, raw: Iterable[str]) -> dict[i
     return resolved
 
 
-async def _process_message(
-    event,
+async def _download_media(msg) -> MediaItem | None:
+    if not msg.media:
+        return None
+    size = getattr(getattr(msg, "file", None), "size", None) or 0
+    if size and size > MAX_MEDIA_SIZE:
+        log.info("skip media: size %s > %s (msg_id=%s)", size, MAX_MEDIA_SIZE, msg.id)
+        return None
+    buf = io.BytesIO()
+    try:
+        await msg.download_media(file=buf)
+    except Exception:
+        log.exception("media download failed (msg_id=%s)", msg.id)
+        return None
+    data = buf.getvalue()
+    if not data:
+        return None
+    if msg.photo:
+        return data, "photo", "photo.jpg"
+    if msg.video:
+        return data, "video", "video.mp4"
+    name = getattr(getattr(msg, "file", None), "name", None) or "file.bin"
+    return data, "document", name
+
+
+async def _collect_media(msgs) -> list[MediaItem]:
+    candidates = [m for m in msgs if m.media]
+    if not candidates:
+        return []
+    results = await asyncio.gather(*(_download_media(m) for m in candidates[:10]))
+    return [r for r in results if r is not None]
+
+
+async def _forward_group(
+    msgs: list,
+    *,
+    chat_entity,
+    hits: list[str],
+    text: str,
+    forwarder: Forwarder,
+) -> bool:
+    first = msgs[0]
+    chat_title = (
+        getattr(chat_entity, "title", None)
+        or getattr(chat_entity, "username", None)
+        or str(first.chat_id)
+    )
+    chat_username = getattr(chat_entity, "username", None)
+    try:
+        sender = await first.get_sender()
+    except Exception:
+        sender = None
+    sender_name = _sender_name_of(sender)
+    link = _chat_link(first.chat_id, first.id, chat_username)
+
+    media = await _collect_media(msgs)
+    if media:
+        caption = _format(
+            chat_title, chat_username, sender_name, hits, text, link, first.date, max_body=800
+        )
+        if len(media) > 1:
+            ok = await forwarder.send_media_group(media, caption)
+        else:
+            data, kind, name = media[0]
+            ok = await forwarder.send_media(data, kind, name, caption)
+    else:
+        payload = _format(
+            chat_title, chat_username, sender_name, hits, text, link, first.date
+        )
+        ok = await forwarder.send(payload)
+
+    if ok:
+        log.info(
+            "forwarded from %s ids=%s hits=%s media=%s",
+            chat_title,
+            [m.id for m in msgs],
+            hits,
+            len(media),
+        )
+    return ok
+
+
+async def _process_group(
+    msgs: list,
     *,
     source_entities: dict[int, object],
     keywords: Keywords,
     matcher_threshold: int,
     dedup: Dedup,
     forwarder: Forwarder,
-) -> None:
-    if event.chat_id not in source_entities:
-        return
-    text = event.raw_text or ""
+) -> bool:
+    if not msgs:
+        return False
+    msgs = sorted(msgs, key=lambda m: m.id)
+    first = msgs[0]
+    entity = source_entities.get(first.chat_id)
+    if entity is None:
+        return False
+    text = " ".join(m.raw_text for m in msgs if m.raw_text)
     if not text:
-        return
+        return False
     hits = match(text, keywords.all(), matcher_threshold)
     if not hits:
-        return
-    if await dedup.seen_or_mark(event.chat_id, event.id, text):
-        return
-
-    chat = source_entities[event.chat_id]
-    chat_title = (
-        getattr(chat, "title", None) or getattr(chat, "username", None) or str(event.chat_id)
+        return False
+    if await dedup.seen_or_mark(first.chat_id, first.id, text):
+        return False
+    return await _forward_group(
+        msgs, chat_entity=entity, hits=hits, text=text, forwarder=forwarder
     )
-    chat_username = getattr(chat, "username", None)
-    sender_name = await _sender_name(event)
-    link = _chat_link(event.chat_id, event.id, chat_username)
-
-    msg = _format(chat_title, chat_username, sender_name, hits, text, link)
-    ok = await forwarder.send(msg)
-    if ok:
-        log.info("forwarded from %s msg_id=%s hits=%s", chat_title, event.id, hits)
 
 
 async def _scan_history(
@@ -137,41 +222,37 @@ async def _scan_history(
         log.info("scanning %s for last %s days...", title, days)
         count = 0
         forwarded = 0
-        async for msg in client.iter_messages(entity, offset_date=None, reverse=False):
+        buffer: list = []
+        current_gid: int | None = None
+
+        async def flush() -> None:
+            nonlocal forwarded
+            if not buffer:
+                return
+            group = list(buffer)
+            buffer.clear()
+            if await _process_group(
+                group,
+                source_entities=source_entities,
+                keywords=keywords,
+                matcher_threshold=matcher_threshold,
+                dedup=dedup,
+                forwarder=forwarder,
+            ):
+                forwarded += 1
+                await asyncio.sleep(0.3)  # bot-api flood guard
+
+        async for msg in client.iter_messages(entity):
             if msg.date is None or msg.date < cutoff:
                 break
             count += 1
-            text = msg.raw_text or msg.message or ""
-            if not text:
-                continue
-            hits = match(text, keywords.all(), matcher_threshold)
-            if not hits:
-                continue
-            if await dedup.seen_or_mark(chat_id, msg.id, text):
-                continue
-
-            chat_username = getattr(entity, "username", None)
-            sender_name = "?"
-            try:
-                sender = await msg.get_sender()
-                if sender is not None:
-                    parts = [
-                        getattr(sender, "first_name", None),
-                        getattr(sender, "last_name", None),
-                    ]
-                    n = " ".join(p for p in parts if p).strip()
-                    sender_name = (
-                        n or getattr(sender, "username", None) or str(getattr(sender, "id", "?"))
-                    )
-            except Exception:
-                pass
-            link = _chat_link(chat_id, msg.id, chat_username)
-            payload = _format(title, chat_username, sender_name, hits, text, link)
-            if await forwarder.send(payload):
-                forwarded += 1
-                total_forwarded += 1
-            # small delay to avoid bot-api flood
-            await asyncio.sleep(0.2)
+            gid = getattr(msg, "grouped_id", None)
+            if gid != current_gid or gid is None:
+                await flush()
+                current_gid = gid
+            buffer.append(msg)
+        await flush()
+        total_forwarded += forwarded
         log.info("scanned %s: %s msgs seen, %s forwarded", title, count, forwarded)
     return total_forwarded
 
@@ -191,7 +272,6 @@ async def run() -> None:
 
     source_entities = await _resolve_sources(client, cfg.source_chats)
 
-    # in-process scan trigger (used by .scan command)
     scan_lock = asyncio.Lock()
 
     async def trigger_scan(days: int) -> None:
@@ -214,13 +294,41 @@ async def run() -> None:
                 log.exception("scan failed")
                 await forwarder.send(f"scan failed: {e}")
 
+    album_buffers: dict[int, list] = {}
+
+    async def _flush_album(gid: int) -> None:
+        await asyncio.sleep(ALBUM_FLUSH_SECONDS)
+        msgs = album_buffers.pop(gid, [])
+        if msgs:
+            try:
+                await _process_group(
+                    msgs,
+                    source_entities=source_entities,
+                    keywords=keywords,
+                    matcher_threshold=cfg.fuzzy_threshold,
+                    dedup=dedup,
+                    forwarder=forwarder,
+                )
+            except Exception:
+                log.exception("album flush failed (gid=%s)", gid)
+
     @client.on(events.NewMessage())
     async def _on_new(event):
         try:
             if await handle_command(event, me.id, keywords, trigger_scan):
                 return
-            await _process_message(
-                event,
+            msg = event.message
+            if msg.chat_id not in source_entities:
+                return
+            gid = getattr(msg, "grouped_id", None)
+            if gid is not None:
+                is_new = gid not in album_buffers
+                album_buffers.setdefault(gid, []).append(msg)
+                if is_new:
+                    asyncio.create_task(_flush_album(gid))
+                return
+            await _process_group(
+                [msg],
                 source_entities=source_entities,
                 keywords=keywords,
                 matcher_threshold=cfg.fuzzy_threshold,
@@ -230,7 +338,6 @@ async def run() -> None:
         except Exception:
             log.exception("handler error")
 
-    # startup catchup
     if cfg.startup_scan_hours > 0 and source_entities:
         hours = cfg.startup_scan_hours
         days = max(1, (hours + 23) // 24)
