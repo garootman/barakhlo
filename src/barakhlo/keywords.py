@@ -6,17 +6,18 @@ from pathlib import Path
 
 
 DEFAULT_KEYWORDS = ["микроволновка", "аэрогриль", "диван"]
+DEFAULT_BLOCKLIST = ["куплю"]
 
 
 class Keywords:
-    """Thread/async-safe (single-process) JSON-backed keyword list."""
+    """Thread/async-safe (single-process) JSON-backed word list."""
 
-    def __init__(self, path: Path) -> None:
+    def __init__(self, path: Path, defaults: list[str] | None = None) -> None:
         self.path = path
         self._lock = threading.Lock()
         if not path.exists():
             path.parent.mkdir(parents=True, exist_ok=True)
-            self._write(DEFAULT_KEYWORDS)
+            self._write(list(defaults or []))
         self._list = self._read()
 
     def _read(self) -> list[str]:

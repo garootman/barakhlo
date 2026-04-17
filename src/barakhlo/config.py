@@ -29,6 +29,10 @@ class Config:
         return self.data_dir / "keywords.json"
 
     @property
+    def blocklist_path(self) -> Path:
+        return self.data_dir / "blocklist.json"
+
+    @property
     def seen_db_path(self) -> Path:
         return self.data_dir / "seen.db"
 

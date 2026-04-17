@@ -11,11 +11,11 @@ from typing import Iterable
 from telethon import TelegramClient, events, utils as tg_utils
 
 from . import config as config_mod
-from .commands import handle_command
+from .commands import HELP_TEXT, handle_command
 from .dedup import Dedup
 from .forwarder import Forwarder, MediaItem
-from .keywords import Keywords
-from .matcher import match
+from .keywords import DEFAULT_BLOCKLIST, DEFAULT_KEYWORDS, Keywords
+from .matcher import has_block, match
 
 
 log = logging.getLogger("barakhlo")
@@ -183,6 +183,7 @@ async def _process_group(
     *,
     source_entities: dict[int, object],
     keywords: Keywords,
+    blocklist: Keywords,
     matcher_threshold: int,
     dedup: Dedup,
     forwarder: Forwarder,
@@ -200,6 +201,12 @@ async def _process_group(
     hits = match(text, keywords.all(), matcher_threshold)
     if not hits:
         return False
+    blocked = has_block(text, blocklist.all())
+    if blocked:
+        log.info(
+            "blocked by %r (kw=%s chat=%s msg=%s)", blocked, hits, first.chat_id, first.id
+        )
+        return False
     if await dedup.seen_or_mark(first.chat_id, first.id, text):
         return False
     return await _forward_group(
@@ -213,6 +220,7 @@ async def _scan_history(
     days: int,
     *,
     keywords: Keywords,
+    blocklist: Keywords,
     matcher_threshold: int,
     dedup: Dedup,
     forwarder: Forwarder,
@@ -237,6 +245,7 @@ async def _scan_history(
                 group,
                 source_entities=source_entities,
                 keywords=keywords,
+                blocklist=blocklist,
                 matcher_threshold=matcher_threshold,
                 dedup=dedup,
                 forwarder=forwarder,
@@ -267,7 +276,8 @@ async def run() -> None:
     me = await client.get_me()
     log.info("logged in as @%s (id=%s)", me.username, me.id)
 
-    keywords = Keywords(cfg.keywords_path)
+    keywords = Keywords(cfg.keywords_path, defaults=DEFAULT_KEYWORDS)
+    blocklist = Keywords(cfg.blocklist_path, defaults=DEFAULT_BLOCKLIST)
     dedup = Dedup(cfg.seen_db_path)
     await dedup.open()
     forwarder = Forwarder(cfg.bot_token, cfg.target_chat_id)
@@ -287,6 +297,7 @@ async def run() -> None:
                     source_entities,
                     days,
                     keywords=keywords,
+                    blocklist=blocklist,
                     matcher_threshold=cfg.fuzzy_threshold,
                     dedup=dedup,
                     forwarder=forwarder,
@@ -307,6 +318,7 @@ async def run() -> None:
                     msgs,
                     source_entities=source_entities,
                     keywords=keywords,
+                    blocklist=blocklist,
                     matcher_threshold=cfg.fuzzy_threshold,
                     dedup=dedup,
                     forwarder=forwarder,
@@ -317,7 +329,7 @@ async def run() -> None:
     @client.on(events.NewMessage())
     async def _on_new(event):
         try:
-            if await handle_command(event, me.id, keywords, trigger_scan):
+            if await handle_command(event, me.id, keywords, blocklist, trigger_scan):
                 return
             msg = event.message
             if msg.chat_id not in source_entities:
@@ -333,12 +345,18 @@ async def run() -> None:
                 [msg],
                 source_entities=source_entities,
                 keywords=keywords,
+                blocklist=blocklist,
                 matcher_threshold=cfg.fuzzy_threshold,
                 dedup=dedup,
                 forwarder=forwarder,
             )
         except Exception:
             log.exception("handler error")
+
+    try:
+        await client.send_message(me.id, f"barakhlo started\n\n{HELP_TEXT}")
+    except Exception:
+        log.exception("failed to send startup message to Saved Messages")
 
     if cfg.startup_scan_hours > 0 and source_entities:
         hours = cfg.startup_scan_hours
@@ -417,7 +435,8 @@ async def scan_cli(days: int) -> None:
     cfg = config_mod.load()
     client = _client(cfg)
     await client.start()
-    keywords = Keywords(cfg.keywords_path)
+    keywords = Keywords(cfg.keywords_path, defaults=DEFAULT_KEYWORDS)
+    blocklist = Keywords(cfg.blocklist_path, defaults=DEFAULT_BLOCKLIST)
     dedup = Dedup(cfg.seen_db_path)
     await dedup.open()
     forwarder = Forwarder(cfg.bot_token, cfg.target_chat_id)
@@ -428,6 +447,7 @@ async def scan_cli(days: int) -> None:
             source_entities,
             days,
             keywords=keywords,
+            blocklist=blocklist,
             matcher_threshold=cfg.fuzzy_threshold,
             dedup=dedup,
             forwarder=forwarder,

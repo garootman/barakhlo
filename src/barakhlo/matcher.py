@@ -19,6 +19,24 @@ def normalize(text: str) -> str:
     return text
 
 
+def has_block(text: str, blocklist: list[str]) -> str | None:
+    """Return the first blocklist term present in text (substring, normalized), else None.
+
+    Substring only — fuzzy would over-block. Short terms are intentionally allowed
+    here because the user explicitly opts into each one.
+    """
+    if not text or not blocklist:
+        return None
+    norm = normalize(text)
+    if not norm:
+        return None
+    for kw in blocklist:
+        kw_n = normalize(kw)
+        if kw_n and kw_n in norm:
+            return kw
+    return None
+
+
 def match(text: str, keywords: list[str], threshold: int) -> list[str]:
     """Return keywords that match, with per-keyword scoring.
 

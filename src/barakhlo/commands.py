@@ -13,19 +13,28 @@ if TYPE_CHECKING:
 log = logging.getLogger(__name__)
 
 _CMD_RE = re.compile(
-    r"^\.(?P<cmd>kw|scan|ping|help)(?:\s+(?P<action>\S+))?(?:\s+(?P<arg>.+))?\s*$",
+    r"^\.(?P<cmd>kw|bl|scan|ping|help)(?:\s+(?P<action>\S+))?(?:\s+(?P<arg>.+))?\s*$",
     re.IGNORECASE,
 )
 
 
 HELP_TEXT = (
-    "commands (send here in Saved Messages):\n"
-    ".kw list             — show keywords\n"
-    ".kw add <word>       — add keyword\n"
-    ".kw rm <word>        — remove keyword\n"
-    ".scan [days]         — rescan source chats for last N days (default 7)\n"
-    ".ping                — check bot is alive\n"
-    ".help                — this help\n"
+    "commands (send here in Saved Messages)\n"
+    "\n"
+    "KEYWORDS — forward messages containing any of these\n"
+    "  .kw                — list keywords\n"
+    "  .kw add <word>     — add keyword   (e.g. .kw add диван)\n"
+    "  .kw rm <word>      — remove keyword (e.g. .kw rm диван)\n"
+    "\n"
+    "BLOCKLIST — ignore messages containing any of these (overrides keywords)\n"
+    "  .bl                — list blocked words\n"
+    "  .bl add <word>     — add blocked word (e.g. .bl add куплю)\n"
+    "  .bl rm <word>      — remove blocked word\n"
+    "\n"
+    "OTHER\n"
+    "  .scan [days]       — rescan source chats for last N days (default 7)\n"
+    "  .ping              — check bot is alive\n"
+    "  .help              — this help\n"
 )
 
 
@@ -33,6 +42,7 @@ async def handle_command(
     event: "events.NewMessage.Event",
     me_id: int,
     keywords: "Keywords",
+    blocklist: "Keywords",
     trigger_scan,
 ) -> bool:
     """Handle a command in Saved Messages. Returns True if it was a command."""
@@ -48,7 +58,9 @@ async def handle_command(
     arg = (m.group("arg") or "").strip()
 
     if cmd == "kw":
-        await _handle_kw(event, keywords, action, arg)
+        await _handle_list(event, keywords, "kw", "keywords", action, arg)
+    elif cmd == "bl":
+        await _handle_list(event, blocklist, "bl", "blocklist", action, arg)
     elif cmd == "scan":
         days = 7
         if action:
@@ -67,27 +79,29 @@ async def handle_command(
     return True
 
 
-async def _handle_kw(event, keywords: "Keywords", action: str, arg: str) -> None:
-    if action == "list" or not action:
-        kws = keywords.all()
+async def _handle_list(
+    event, items: "Keywords", cmd: str, name: str, action: str, arg: str
+) -> None:
+    if action in ("", "list"):
+        kws = items.all()
         if not kws:
-            await event.reply("keywords: (empty)")
+            await event.reply(f"{name}: (empty)")
         else:
             body = "\n".join(f"- {k}" for k in kws)
-            await event.reply(f"keywords ({len(kws)}):\n{body}")
+            await event.reply(f"{name} ({len(kws)}):\n{body}")
         return
     if action == "add":
         if not arg:
-            await event.reply("usage: .kw add <word>")
+            await event.reply(f"usage: .{cmd} add <word>")
             return
-        ok = keywords.add(arg)
+        ok = items.add(arg)
         await event.reply(f"{'added' if ok else 'already exists'}: {arg}")
         return
     if action in ("rm", "remove", "del"):
         if not arg:
-            await event.reply("usage: .kw rm <word>")
+            await event.reply(f"usage: .{cmd} rm <word>")
             return
-        ok = keywords.remove(arg)
+        ok = items.remove(arg)
         await event.reply(f"{'removed' if ok else 'not found'}: {arg}")
         return
-    await event.reply(f"unknown kw action: {action}")
+    await event.reply(f"unknown {name} action: {action}")
