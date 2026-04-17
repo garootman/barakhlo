@@ -11,6 +11,7 @@ from typing import Iterable
 from telethon import TelegramClient, events, utils as tg_utils
 
 from . import config as config_mod
+from .bot_commands import BotCommands
 from .commands import HELP_TEXT, handle_command
 from .dedup import Dedup
 from .forwarder import Forwarder, MediaItem
@@ -358,6 +359,13 @@ async def run() -> None:
     except Exception:
         log.exception("failed to send startup message to Saved Messages")
 
+    bot_cmds = BotCommands(
+        cfg.bot_token, cfg.target_chat_id, keywords, blocklist, trigger_scan
+    )
+    await bot_cmds.setup_menu()
+    await bot_cmds.greet()
+    poll_task = asyncio.create_task(bot_cmds.poll())
+
     if cfg.startup_scan_hours > 0 and source_entities:
         hours = cfg.startup_scan_hours
         days = max(1, (hours + 23) // 24)
@@ -395,7 +403,13 @@ async def run() -> None:
     except asyncio.CancelledError:
         pass
     finally:
-        log.info("closing forwarder + dedup")
+        log.info("closing forwarder + dedup + bot commands")
+        poll_task.cancel()
+        try:
+            await poll_task
+        except (asyncio.CancelledError, Exception):
+            pass
+        await bot_cmds.close()
         await forwarder.close()
         await dedup.close()
 
