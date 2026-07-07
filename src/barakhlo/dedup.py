@@ -8,6 +8,7 @@ import aiosqlite
 
 
 DEFAULT_TTL_SECONDS = 7 * 24 * 3600
+GC_INTERVAL_SECONDS = 3600
 
 
 class Dedup:
@@ -17,10 +18,14 @@ class Dedup:
         self.path = path
         self.ttl = ttl_seconds
         self._db: aiosqlite.Connection | None = None
+        self._last_gc = 0.0
 
     async def open(self) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self._db = await aiosqlite.connect(str(self.path))
+        # WAL + NORMAL sync: commit-per-message no longer means fsync-per-message
+        await self._db.execute("PRAGMA journal_mode=WAL")
+        await self._db.execute("PRAGMA synchronous=NORMAL")
         await self._db.execute(
             "CREATE TABLE IF NOT EXISTS seen (key TEXT PRIMARY KEY, ts INTEGER NOT NULL)"
         )
@@ -66,7 +71,8 @@ class Dedup:
         if text_k:
             rows.append((text_k, now))
         await self._db.executemany("INSERT OR REPLACE INTO seen(key, ts) VALUES (?, ?)", rows)
-        # opportunistic GC
-        await self._db.execute("DELETE FROM seen WHERE ts < ?", (cutoff,))
+        if now - self._last_gc >= GC_INTERVAL_SECONDS:
+            await self._db.execute("DELETE FROM seen WHERE ts < ?", (cutoff,))
+            self._last_gc = now
         await self._db.commit()
         return False
