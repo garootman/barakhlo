@@ -50,7 +50,7 @@ Telegram albums are N separate messages sharing a `grouped_id`; only one typical
 - `commands.py` — parses `.kw|.scan|.ping|.help` *only* when `event.chat_id == me_id` (Saved Messages). `.scan` passes through a `trigger_scan` callable from `run()` guarded by `asyncio.Lock` against concurrent scans.
 
 ### Deploy model
-Two GitHub Actions workflows: `build.yml` builds/pushes to `ghcr.io/garootman/barakhlo` on every push to `main`; `deploy.yml` runs on a **self-hosted runner on the VPS** after a successful build, syncs `compose.yaml` to `$BARAKHLO_HOME` (default `~/barakhlo`), `docker compose pull && up -d`. `.env` and `./data` live on the VPS — never in the image. Changes to those require SSH, not a push. `compose.local.yaml` is the dev-time counterpart that builds from the local `Dockerfile`.
+`build.yml` builds/pushes a multi-arch (amd64 + arm64) image to `ghcr.io/garootman/barakhlo` on every push to `main`. Deploy is **manual**: SSH to the host, `cd ~/barakhlo && docker compose up -d` (`pull_policy: always` fetches the new `:latest`). The old self-hosted-runner auto-deploy is disabled (`.github/workflows/disabled/deploy.yml.bak`). `.env` and `./data` live on the VPS — never in the image. Changes to those require SSH, not a push. `compose.local.yaml` is the dev-time counterpart that builds from the local `Dockerfile`.
 
 ## Gotchas
 
