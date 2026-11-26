@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 import asyncio
-import io
 import logging
 import signal
+import tempfile
 from collections.abc import Iterable
 from datetime import UTC, datetime, timedelta
 from html import escape
+from pathlib import Path
 
 from telethon import TelegramClient, events
 from telethon import utils as tg_utils
@@ -100,35 +101,35 @@ async def _resolve_sources(client: TelegramClient, raw: Iterable[str]) -> dict[i
     return resolved
 
 
-async def _download_media(msg) -> MediaItem | None:
+async def _download_media(msg, tmpdir: Path) -> MediaItem | None:
     if not msg.media:
         return None
     size = getattr(getattr(msg, "file", None), "size", None) or 0
     if size and size > MAX_MEDIA_SIZE:
         log.info("skip media: size %s > %s (msg_id=%s)", size, MAX_MEDIA_SIZE, msg.id)
         return None
-    buf = io.BytesIO()
+    # Download to disk, not memory: an album is up to 10 x 45 MB.
+    path = tmpdir / str(msg.id)
     try:
-        await msg.download_media(file=buf)
+        await msg.download_media(file=str(path))
     except Exception:
         log.exception("media download failed (msg_id=%s)", msg.id)
         return None
-    data = buf.getvalue()
-    if not data:
+    if not path.exists() or path.stat().st_size == 0:
         return None
     if msg.photo:
-        return data, "photo", "photo.jpg"
+        return path, "photo", "photo.jpg"
     if msg.video:
-        return data, "video", "video.mp4"
+        return path, "video", "video.mp4"
     name = getattr(getattr(msg, "file", None), "name", None) or "file.bin"
-    return data, "document", name
+    return path, "document", name
 
 
-async def _collect_media(msgs) -> list[MediaItem]:
+async def _collect_media(msgs, tmpdir: Path) -> list[MediaItem]:
     candidates = [m for m in msgs if m.media]
     if not candidates:
         return []
-    results = await asyncio.gather(*(_download_media(m) for m in candidates[:10]))
+    results = await asyncio.gather(*(_download_media(m, tmpdir) for m in candidates[:10]))
     return [r for r in results if r is not None]
 
 
@@ -154,17 +155,18 @@ async def _forward_group(
     sender_name = _sender_name_of(sender)
     link = _chat_link(first.chat_id, first.id, chat_username)
 
-    media = await _collect_media(msgs)
-    if media:
-        caption = _format(
-            chat_title, chat_username, sender_name, hits, text, link, first.date, max_body=800
-        )
-        if len(media) > 1:
-            ok = await forwarder.send_media_group(media, caption)
-        else:
-            data, kind, name = media[0]
-            ok = await forwarder.send_media(data, kind, name, caption)
-    else:
+    with tempfile.TemporaryDirectory(prefix="barakhlo-") as tmp:
+        media = await _collect_media(msgs, Path(tmp))
+        if media:
+            caption = _format(
+                chat_title, chat_username, sender_name, hits, text, link, first.date, max_body=800
+            )
+            if len(media) > 1:
+                ok = await forwarder.send_media_group(media, caption)
+            else:
+                path, kind, name = media[0]
+                ok = await forwarder.send_media(path, kind, name, caption)
+    if not media:
         payload = _format(
             chat_title, chat_username, sender_name, hits, text, link, first.date
         )

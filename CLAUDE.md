@@ -39,7 +39,7 @@ Telegram albums are N separate messages sharing a `grouped_id`; only one typical
 - **Live**: when a message with `grouped_id` arrives, append to `album_buffers[gid]` and on the first hit schedule `_flush_album(gid)` after `ALBUM_FLUSH_SECONDS` (1.5s). Standalone messages skip the buffer and go straight to `_process_group([msg])`.
 - **Scan**: `iter_messages` walks newest→oldest; consecutive messages with the same `grouped_id` accumulate into `buffer`, flushing when `grouped_id` changes or is `None`.
 
-`_process_group` joins all `raw_text` from the group, matches keywords against the combined text, dedups using the smallest `msg_id` + combined-text hash (so rescans don't re-forward), then calls `_forward_group`. Forwarding picks the right Bot API method by media count: >1 → `sendMediaGroup`, 1 → `sendPhoto`/`sendVideo`/`sendDocument`, 0 → `sendMessage`. Media is downloaded into memory in parallel via `asyncio.gather`, up to 10 items, up to 45 MB each. Caption format puts the `open in telegram` link in the header (not footer) so it survives the 1024-char caption cap.
+`_process_group` joins all `raw_text` from the group, matches keywords against the combined text, dedups using the smallest `msg_id` + combined-text hash (so rescans don't re-forward), then calls `_forward_group`. Forwarding picks the right Bot API method by media count: >1 → `sendMediaGroup`, 1 → `sendPhoto`/`sendVideo`/`sendDocument`, 0 → `sendMessage`. Media is downloaded in parallel via `asyncio.gather` (up to 10 items, up to 45 MB each) into a per-group temp dir on disk, and httpx streams the open files — memory stays flat regardless of media size. Caption format puts the `open in telegram` link in the header (not footer) so it survives the 1024-char caption cap.
 
 ### Module responsibilities
 - `config.py` — env-var loading. All runtime state lives under `BARAKHLO_DATA` (default `/data` in the container). Holds `barakhlo.session`, `keywords.json`, `seen.db`, `chats.txt`.
@@ -50,7 +50,7 @@ Telegram albums are N separate messages sharing a `grouped_id`; only one typical
 - `commands.py` — parses `.kw|.scan|.ping|.help` *only* when `event.chat_id == me_id` (Saved Messages). `.scan` passes through a `trigger_scan` callable from `run()` guarded by `asyncio.Lock` against concurrent scans.
 
 ### Deploy model
-`build.yml` builds/pushes a multi-arch (amd64 + arm64) image to `ghcr.io/garootman/barakhlo` on every push to `main`. Deploy is **manual**: SSH to the host, `cd ~/barakhlo && docker compose up -d` (`pull_policy: always` fetches the new `:latest`). The old self-hosted-runner auto-deploy is disabled (`.github/workflows/disabled/deploy.yml.bak`). `.env` and `./data` live on the VPS — never in the image. Changes to those require SSH, not a push. Resource limits (0.5 CPU, 1 GB RAM) live in `compose.yaml`; the host's copy is not synced automatically — copy it over after changing it.
+`build.yml` builds/pushes a multi-arch (amd64 + arm64) image to `ghcr.io/garootman/barakhlo` on every push to `main`. Deploy is **manual**: SSH to the host, `cd ~/barakhlo && docker compose up -d` (`pull_policy: always` fetches the new `:latest`). The old self-hosted-runner auto-deploy is disabled (`.github/workflows/disabled/deploy.yml.bak`). `.env` and `./data` live on the VPS — never in the image. Changes to those require SSH, not a push. Resource limits (0.5 CPU, 512 MB RAM) live in `compose.yaml`; the host's copy is not synced automatically — copy it over after changing it.
 
 ## Gotchas
 

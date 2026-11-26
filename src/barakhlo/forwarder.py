@@ -2,12 +2,14 @@ from __future__ import annotations
 
 import json
 import logging
+from contextlib import ExitStack
+from pathlib import Path
 
 import httpx
 
 log = logging.getLogger(__name__)
 
-MediaItem = tuple[bytes, str, str]  # (data, kind, filename) — kind in {photo,video,document}
+MediaItem = tuple[Path, str, str]  # (path on disk, kind, filename) — kind in {photo,video,document}
 
 
 class Forwarder:
@@ -37,7 +39,7 @@ class Forwarder:
             log.warning("bot send error: %s", e)
             return False
 
-    async def send_media(self, data: bytes, kind: str, filename: str, caption: str) -> bool:
+    async def send_media(self, path: Path, kind: str, filename: str, caption: str) -> bool:
         method = {"photo": "sendPhoto", "video": "sendVideo"}.get(kind, "sendDocument")
         field = {"photo": "photo", "video": "video"}.get(kind, "document")
         form = {
@@ -46,11 +48,13 @@ class Forwarder:
             "parse_mode": "HTML",
         }
         try:
-            r = await self._client.post(
-                f"{self._base}/{method}",
-                data=form,
-                files={field: (filename, data)},
-            )
+            # Open files are streamed by httpx in chunks instead of being loaded whole.
+            with path.open("rb") as f:
+                r = await self._client.post(
+                    f"{self._base}/{method}",
+                    data=form,
+                    files={field: (filename, f)},
+                )
             if r.status_code >= 400:
                 log.warning("bot %s failed: %s %s", method, r.status_code, r.text[:300])
                 return False
@@ -63,13 +67,19 @@ class Forwarder:
         if not items:
             return False
         if len(items) == 1:
-            data, kind, filename = items[0]
-            return await self.send_media(data, kind, filename, caption)
-        files: dict[str, tuple[str, bytes]] = {}
+            path, kind, filename = items[0]
+            return await self.send_media(path, kind, filename, caption)
+        with ExitStack() as stack:
+            return await self._send_media_group(items, caption, stack)
+
+    async def _send_media_group(
+        self, items: list[MediaItem], caption: str, stack: ExitStack
+    ) -> bool:
+        files: dict = {}
         descriptors: list[dict] = []
-        for i, (data, kind, filename) in enumerate(items[:10]):
+        for i, (path, kind, filename) in enumerate(items[:10]):
             key = f"file{i}"
-            files[key] = (filename, data)
+            files[key] = (filename, stack.enter_context(path.open("rb")))
             t = kind if kind in ("photo", "video", "document") else "document"
             desc: dict = {"type": t, "media": f"attach://{key}"}
             if i == 0 and caption:
