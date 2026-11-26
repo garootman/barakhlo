@@ -20,8 +20,8 @@ BARAKHLO_DATA=$PWD/data uv run --env-file .env python -m barakhlo run       # st
 BARAKHLO_DATA=$PWD/data uv run --env-file .env python -m barakhlo scan 7    # one-shot history scan (days)
 
 # Or via docker (builds from local Dockerfile, no ghcr pull):
-docker compose -f compose.local.yaml run --rm barakhlo auth
-docker compose -f compose.local.yaml up --build
+docker build -t barakhlo:local .
+docker run --rm -it --env-file .env -v "$PWD/data:/data" barakhlo:local auth
 ```
 
 No test suite exists. Do not invent one unless asked.
@@ -50,7 +50,7 @@ Telegram albums are N separate messages sharing a `grouped_id`; only one typical
 - `commands.py` — parses `.kw|.scan|.ping|.help` *only* when `event.chat_id == me_id` (Saved Messages). `.scan` passes through a `trigger_scan` callable from `run()` guarded by `asyncio.Lock` against concurrent scans.
 
 ### Deploy model
-`build.yml` builds/pushes a multi-arch (amd64 + arm64) image to `ghcr.io/garootman/barakhlo` on every push to `main`. Deploy is **manual**: SSH to the host, `cd ~/barakhlo && docker compose up -d` (`pull_policy: always` fetches the new `:latest`). The old self-hosted-runner auto-deploy is disabled (`.github/workflows/disabled/deploy.yml.bak`). `.env` and `./data` live on the VPS — never in the image. Changes to those require SSH, not a push. `compose.local.yaml` is the dev-time counterpart that builds from the local `Dockerfile`.
+`build.yml` builds/pushes a multi-arch (amd64 + arm64) image to `ghcr.io/garootman/barakhlo` on every push to `main`. Deploy is **manual**: SSH to the host, `cd ~/barakhlo && docker compose up -d` (`pull_policy: always` fetches the new `:latest`). The old self-hosted-runner auto-deploy is disabled (`.github/workflows/disabled/deploy.yml.bak`). `.env` and `./data` live on the VPS — never in the image. Changes to those require SSH, not a push. Resource limits (0.5 CPU, 1 GB RAM) live in `compose.yaml`; the host's copy is not synced automatically — copy it over after changing it.
 
 ## Gotchas
 
