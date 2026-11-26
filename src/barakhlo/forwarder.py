@@ -5,7 +5,6 @@ import logging
 
 import httpx
 
-
 log = logging.getLogger(__name__)
 
 MediaItem = tuple[bytes, str, str]  # (data, kind, filename) — kind in {photo,video,document}

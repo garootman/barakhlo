@@ -4,7 +4,6 @@ import re
 
 from rapidfuzz import fuzz
 
-
 _PUNCT_RE = re.compile(r"[^\w\s]", re.UNICODE)
 _SPACE_RE = re.compile(r"\s+")
 

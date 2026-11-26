@@ -4,7 +4,6 @@ import json
 import threading
 from pathlib import Path
 
-
 DEFAULT_KEYWORDS = ["микроволновка", "аэрогриль", "диван"]
 DEFAULT_BLOCKLIST = ["куплю"]
 

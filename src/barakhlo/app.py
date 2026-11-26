@@ -4,11 +4,12 @@ import asyncio
 import io
 import logging
 import signal
-from datetime import datetime, timedelta, timezone
+from collections.abc import Iterable
+from datetime import UTC, datetime, timedelta
 from html import escape
-from typing import Iterable
 
-from telethon import TelegramClient, events, utils as tg_utils
+from telethon import TelegramClient, events
+from telethon import utils as tg_utils
 
 from . import config as config_mod
 from .bot_commands import BotCommands
@@ -17,7 +18,6 @@ from .dedup import Dedup
 from .forwarder import Forwarder, MediaItem
 from .keywords import DEFAULT_BLOCKLIST, DEFAULT_KEYWORDS, Keywords
 from .matcher import has_block, match
-
 
 log = logging.getLogger("barakhlo")
 
@@ -95,7 +95,7 @@ async def _resolve_sources(client: TelegramClient, raw: Iterable[str]) -> dict[i
             marked = tg_utils.get_peer_id(entity)
             resolved[marked] = entity
             log.info("watching %s -> id=%s title=%s", s, marked, getattr(entity, "title", ""))
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 — one bad source must not stop the rest
             log.error("cannot resolve source %r: %s", s, e)
     return resolved
 
@@ -149,7 +149,7 @@ async def _forward_group(
     chat_username = getattr(chat_entity, "username", None)
     try:
         sender = await first.get_sender()
-    except Exception:
+    except Exception:  # noqa: BLE001 — sender is cosmetic; forward without it
         sender = None
     sender_name = _sender_name_of(sender)
     link = _chat_link(first.chat_id, first.id, chat_username)
@@ -228,7 +228,7 @@ async def _scan_history(
     dedup: Dedup,
     forwarder: Forwarder,
 ) -> int:
-    cutoff = datetime.now(tz=timezone.utc) - timedelta(days=days)
+    cutoff = datetime.now(tz=UTC) - timedelta(days=days)
     total_forwarded = 0
     for chat_id, entity in source_entities.items():
         title = getattr(entity, "title", str(chat_id))
@@ -238,7 +238,7 @@ async def _scan_history(
         buffer: list = []
         current_gid: int | None = None
 
-        async def flush() -> None:
+        async def flush(buffer: list) -> None:
             nonlocal forwarded
             if not buffer:
                 return
@@ -262,10 +262,10 @@ async def _scan_history(
             count += 1
             gid = getattr(msg, "grouped_id", None)
             if gid != current_gid or gid is None:
-                await flush()
+                await flush(buffer)
                 current_gid = gid
             buffer.append(msg)
-        await flush()
+        await flush(buffer)
         total_forwarded += forwarded
         log.info("scanned %s: %s msgs seen, %s forwarded", title, count, forwarded)
     return total_forwarded
@@ -409,8 +409,10 @@ async def run() -> None:
         poll_task.cancel()
         try:
             await poll_task
-        except (asyncio.CancelledError, Exception):
+        except asyncio.CancelledError:
             pass
+        except Exception:
+            log.exception("bot command poller failed")
         await bot_cmds.close()
         await forwarder.close()
         await dedup.close()

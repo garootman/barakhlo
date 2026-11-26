@@ -6,7 +6,6 @@ from pathlib import Path
 
 import aiosqlite
 
-
 DEFAULT_TTL_SECONDS = 7 * 24 * 3600
 GC_INTERVAL_SECONDS = 3600
 
@@ -40,7 +39,7 @@ class Dedup:
     @staticmethod
     def _text_key(chat_id: int, text: str) -> str:
         norm = " ".join(text.strip().lower().split())
-        digest = hashlib.sha256(f"{chat_id}::{norm}".encode("utf-8")).hexdigest()[:16]
+        digest = hashlib.sha256(f"{chat_id}::{norm}".encode()).hexdigest()[:16]
         return f"t:{digest}"
 
     @staticmethod

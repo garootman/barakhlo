@@ -5,7 +5,6 @@ import sys
 
 from . import app
 
-
 USAGE = (
     "usage: barakhlo {run|auth|chats|scan [days]}\n"
     "  run            start the userbot daemon\n"

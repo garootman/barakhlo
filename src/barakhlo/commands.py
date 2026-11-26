@@ -39,10 +39,10 @@ HELP_TEXT = (
 
 
 async def handle_command(
-    event: "events.NewMessage.Event",
+    event: events.NewMessage.Event,
     me_id: int,
-    keywords: "Keywords",
-    blocklist: "Keywords",
+    keywords: Keywords,
+    blocklist: Keywords,
     trigger_scan,
 ) -> bool:
     """Handle a command in Saved Messages. Returns True if it was a command."""
@@ -80,7 +80,7 @@ async def handle_command(
 
 
 async def _handle_list(
-    event, items: "Keywords", cmd: str, name: str, action: str, arg: str
+    event, items: Keywords, cmd: str, name: str, action: str, arg: str
 ) -> None:
     if action in ("", "list"):
         kws = items.all()

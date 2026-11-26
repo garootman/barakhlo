@@ -3,12 +3,11 @@ from __future__ import annotations
 import asyncio
 import logging
 import re
-from typing import Awaitable, Callable
+from collections.abc import Awaitable, Callable
 
 import httpx
 
 from .keywords import Keywords
-
 
 log = logging.getLogger(__name__)
 
