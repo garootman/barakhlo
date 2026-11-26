@@ -30,6 +30,8 @@ def _setup_logging() -> None:
         level=logging.INFO,
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
     )
+    # httpx logs full request URLs at INFO, and Bot API URLs embed the bot token.
+    logging.getLogger("httpx").setLevel(logging.WARNING)
 
 
 def _client(cfg: config_mod.Config) -> TelegramClient:
