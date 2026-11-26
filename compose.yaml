@@ -9,3 +9,8 @@ services:
       - ./data:/data
     stdin_open: true
     tty: true
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: 1g
